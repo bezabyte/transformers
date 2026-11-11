@@ -90,6 +90,21 @@ class SamProcessorTest(ProcessorTesterMixin, unittest.TestCase):
             self.assertEqual(label.shape, (256, 256))
 
     @require_torch
+    def test_ragged_input_boxes_are_padded(self):
+        image_processor = self.get_component("image_processor")
+        processor = SamProcessor(image_processor=image_processor)
+        images = [np.zeros((30, 400, 3), dtype=np.uint8)] * 2
+        input_boxes = [
+            [[10, 10, 100, 100], [120, 120, 200, 200]],
+            [[20, 20, 180, 180]],
+        ]
+
+        encoding = processor(images=images, input_boxes=input_boxes, return_tensors="pt")
+
+        self.assertEqual(encoding.input_boxes.shape, (2, 2, 4))
+        self.assertEqual(encoding.input_boxes_mask.tolist(), [[True, True], [True, False]])
+
+    @require_torch
     def test_post_process_masks(self):
         image_processor = self.get_component("image_processor")
 

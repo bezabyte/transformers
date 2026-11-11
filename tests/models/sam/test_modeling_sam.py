@@ -530,6 +530,32 @@ class SamModelTest(ModelTesterMixin, PipelineTesterMixin, unittest.TestCase):
         config_and_inputs = self.model_tester.prepare_config_and_inputs()
         self.model_tester.create_and_check_model(*config_and_inputs)
 
+    def test_model_masks_padded_boxes(self):
+        config, pixel_values = self.model_tester.prepare_config_and_inputs()
+        model = SamModel(config).to(torch_device).eval()
+        input_boxes = torch.tensor(
+            [
+                [[2, 2, 8, 8], [10, 10, 20, 20]],
+                [[4, 4, 16, 16], [0, 0, 0, 0]],
+            ],
+            dtype=torch.float32,
+            device=torch_device,
+        )
+        input_boxes_mask = torch.tensor([[True, True], [True, False]], device=torch_device)
+
+        with torch.no_grad():
+            outputs = model(
+                pixel_values=pixel_values,
+                input_boxes=input_boxes,
+                input_boxes_mask=input_boxes_mask,
+                multimask_output=False,
+            )
+
+        self.assertEqual(outputs.iou_scores.shape, (2, 2, 1))
+        self.assertEqual(outputs.pred_masks.shape[:3], (2, 2, 1))
+        self.assertTrue(torch.all(outputs.iou_scores[1, 1] == 0))
+        self.assertTrue(torch.all(outputs.pred_masks[1, 1] == 0))
+
     def test_get_image_features(self):
         config_and_inputs = self.model_tester.prepare_config_and_inputs()
         self.model_tester.create_and_check_get_image_features(*config_and_inputs)
