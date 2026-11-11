@@ -222,6 +222,24 @@ class SamProcessor(ProcessorMixin):
                     self._normalize_coordinates(self.target_size, box, original_size, is_bounding_box=True)
                     for box, original_size in zip(input_boxes, original_sizes)
                 ]
+            if not all(box.shape == input_boxes[0].shape for box in input_boxes):
+                expected_nb_boxes = max(box.shape[0] for box in input_boxes)
+                input_boxes_mask = []
+                padded_input_boxes = []
+
+                for boxes in input_boxes:
+                    num_boxes = boxes.shape[0]
+                    padding = expected_nb_boxes - num_boxes
+                    if padding:
+                        boxes = np.concatenate([boxes, np.zeros((padding, 4), dtype=boxes.dtype)], axis=0)
+                    padded_input_boxes.append(boxes)
+                    input_boxes_mask.append([True] * num_boxes + [False] * padding)
+
+                input_boxes = padded_input_boxes
+                input_boxes_mask = np.array(input_boxes_mask)
+            else:
+                input_boxes_mask = None
+
             input_boxes = np.array(input_boxes)
 
         if input_boxes is not None:
@@ -230,6 +248,10 @@ class SamProcessor(ProcessorMixin):
                 # boxes batch size of 1 by default
                 input_boxes = input_boxes.unsqueeze(1) if len(input_boxes.shape) != 3 else input_boxes
             encoding_image_processor.update({"input_boxes": input_boxes})
+            if input_boxes_mask is not None:
+                if return_tensors == "pt":
+                    input_boxes_mask = torch.from_numpy(input_boxes_mask)
+                encoding_image_processor.update({"input_boxes_mask": input_boxes_mask})
         if input_points is not None:
             if return_tensors == "pt":
                 input_points = torch.from_numpy(input_points)

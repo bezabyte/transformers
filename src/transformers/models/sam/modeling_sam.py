@@ -661,6 +661,7 @@ class SamPromptEncoder(nn.Module):
         input_labels: torch.Tensor | None,
         input_boxes: torch.Tensor | None,
         input_masks: torch.Tensor | None,
+        input_boxes_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Embeds different types of prompts, returning both sparse and dense embeddings.
@@ -684,6 +685,8 @@ class SamPromptEncoder(nn.Module):
         if input_boxes is not None:
             batch_size = input_boxes.shape[0]
             box_embeddings = self._embed_boxes(input_boxes)
+            if input_boxes_mask is not None:
+                box_embeddings = box_embeddings.masked_fill(~input_boxes_mask[:, :, None, None], 0)
             if sparse_embeddings is None:
                 sparse_embeddings = box_embeddings
             else:
@@ -1161,6 +1164,7 @@ class SamModel(SamPreTrainedModel):
         input_points: torch.Tensor | None = None,
         input_labels: torch.LongTensor | None = None,
         input_boxes: torch.Tensor | None = None,
+        input_boxes_mask: torch.BoolTensor | None = None,
         input_masks: torch.LongTensor | None = None,
     ):
         r"""
@@ -1177,6 +1181,9 @@ class SamModel(SamPreTrainedModel):
             input_boxes (`torch.Tensor` of shape `(batch_size, num_boxes_per_image, 4)`):
                 Optional input boxes for the prompt encoder. The padding of the boxes is automatically done by the
                 processor. users can also pass manually the input boxes.
+            input_boxes_mask (`torch.BoolTensor` of shape `(batch_size, num_boxes_per_image)`, *optional*):
+                Mask indicating which input boxes are valid when the processor pads batches with different numbers of
+                boxes.
             input_masks (`torch.LongTensor` of shape `(batch_size, image_size, image_size)`):
                 Optional input masks for the prompt encoder.
         """
@@ -1184,6 +1191,7 @@ class SamModel(SamPreTrainedModel):
             input_points=input_points,
             input_labels=input_labels,
             input_boxes=input_boxes,
+            input_boxes_mask=input_boxes_mask,
             input_masks=input_masks,
         )
         return prompt_output
@@ -1197,6 +1205,7 @@ class SamModel(SamPreTrainedModel):
         input_points: torch.Tensor | None = None,
         input_labels: torch.LongTensor | None = None,
         input_boxes: torch.Tensor | None = None,
+        input_boxes_mask: torch.BoolTensor | None = None,
         input_masks: torch.LongTensor | None = None,
         image_embeddings: torch.Tensor | None = None,
         multimask_output: bool = True,
@@ -1239,6 +1248,10 @@ class SamModel(SamPreTrainedModel):
             - `y1`: the y coordinate of the top left point of the input box
             - `x2`: the x coordinate of the bottom right point of the input box
             - `y2`: the y coordinate of the bottom right point of the input box
+        input_boxes_mask (`torch.BoolTensor` of shape `(batch_size, num_boxes)`, *optional*):
+            A mask indicating which input boxes are valid. This is created by the processor when images in a batch
+            contain different numbers of boxes. `False` entries are padding and are ignored by the prompt encoder and
+            masked in the model outputs.
         input_masks (`torch.Tensor` of shape `(batch_size, image_size, image_size)`):
             SAM model also accepts segmentation masks as input. The mask will be embedded by the prompt encoder to
             generate a corresponding embedding, that will be fed later on to the mask decoder. These masks needs to be
@@ -1300,6 +1313,13 @@ class SamModel(SamPreTrainedModel):
                 "The input_points must be a 3D tensor. Of shape `batch_size`, `nb_boxes`, `4`.",
                 f" got {input_boxes.shape}.",
             )
+        if input_boxes_mask is not None:
+            if input_boxes is None:
+                raise ValueError("`input_boxes_mask` can only be provided when `input_boxes` is provided.")
+            if input_boxes_mask.shape != input_boxes.shape[:2]:
+                raise ValueError(
+                    "The `input_boxes_mask` must have shape `(batch_size, num_boxes)` matching `input_boxes`."
+                )
         if input_points is not None and input_boxes is not None:
             point_batch_size = input_points.shape[1]
             box_batch_size = input_boxes.shape[1]
@@ -1338,6 +1358,7 @@ class SamModel(SamPreTrainedModel):
             input_points=input_points,
             input_labels=input_labels,
             input_boxes=input_boxes,
+            input_boxes_mask=input_boxes_mask,
             input_masks=input_masks,
         )
 
@@ -1350,6 +1371,11 @@ class SamModel(SamPreTrainedModel):
             attention_similarity=attention_similarity,
             target_embedding=target_embedding,
         )
+
+        if input_boxes_mask is not None:
+            output_mask = input_boxes_mask[:, :, None, None, None]
+            low_res_masks = low_res_masks.masked_fill(~output_mask, 0)
+            iou_predictions = iou_predictions.masked_fill(~input_boxes_mask[:, :, None], 0)
 
         return SamImageSegmentationOutput(
             iou_scores=iou_predictions,
